@@ -1,8 +1,8 @@
 #ifndef _PBGL_MEMORY_H
 #define _PBGL_MEMORY_H
 
-#include "types.h"
 #include "GL/gl.h"
+#include "types.h"
 
 #define MEM_ALIGNMENT 16
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))

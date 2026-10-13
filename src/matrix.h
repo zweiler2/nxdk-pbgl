@@ -4,18 +4,18 @@
 #include "types.h"
 
 #define MTX_STACK_SIZE_MV 32
-#define MTX_STACK_SIZE_P  4
-#define MTX_STACK_SIZE_T  2
+#define MTX_STACK_SIZE_P 4
+#define MTX_STACK_SIZE_T 2
 
 enum matrix_type_e {
-  MTX_MODELVIEW,
-  MTX_PROJECTION,
-  MTX_TEXTURE0,
-  MTX_TEXTURE1,
-  MTX_TEXTURE2,
-  MTX_TEXTURE3,
+    MTX_MODELVIEW,
+    MTX_PROJECTION,
+    MTX_TEXTURE0,
+    MTX_TEXTURE1,
+    MTX_TEXTURE2,
+    MTX_TEXTURE3,
 
-  MTX_COUNT
+    MTX_COUNT
 };
 
 void pbgl_mtx_reset(GLenum stack);

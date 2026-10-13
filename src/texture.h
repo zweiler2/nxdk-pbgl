@@ -14,74 +14,74 @@
 #define PAL_SHARED_COUNT 8
 
 typedef struct {
-  GLubyte *data;
-  GLuint width;
-  GLuint height;
-  GLuint size;
-  GLuint pitch;
+    GLubyte *data;
+    GLuint width;
+    GLuint height;
+    GLuint size;
+    GLuint pitch;
 } mipmap_t;
 
 typedef struct {
-  const GLubyte *source;
-  GLubyte *data;
-  GLenum baseformat;
-  GLenum extformat;
-  GLushort intbytespp; // requested by client; internally all palettes are 4 bytes
-  GLushort extbytespp;
-  GLushort width;
+    const GLubyte *source;
+    GLubyte *data;
+    GLenum baseformat;
+    GLenum extformat;
+    GLushort intbytespp; // requested by client; internally all palettes are 4 bytes
+    GLushort extbytespp;
+    GLushort width;
 } palette_t;
 
 typedef struct {
-  struct {
-    GLuint format;         // all nv format flags
-    GLuint palette;        // palette format flags
-    GLuint filter;         // combined min/mag filter f;ags
-    GLuint wrap;           // combined s/t addressing mode flags
-    GLuint addr;           // data & 0x7FFFFFFF
-    GLboolean linear : 1;  // is the texture linear?
-    GLboolean aligned : 1; // is size 64-byte aligned?
-  } nv;
+    struct {
+        GLuint format;         // all nv format flags
+        GLuint palette;        // palette format flags
+        GLuint filter;         // combined min/mag filter f;ags
+        GLuint wrap;           // combined s/t addressing mode flags
+        GLuint addr;           // data & 0x7FFFFFFF
+        GLboolean linear : 1;  // is the texture linear?
+        GLboolean aligned : 1; // is size 64-byte aligned?
+    } nv;
 
-  struct {
-    GLenum basetarget;
-    GLenum type;
-    GLenum format;
-    GLenum baseformat;
-    GLenum min_filter;
-    GLenum mag_filter;
-    GLenum wrap_s;
-    GLenum wrap_t;
-    GLenum wrap_r;
-    GLboolean border : 1;
-    GLboolean gen_mipmap : 1;
-  } gl;
+    struct {
+        GLenum basetarget;
+        GLenum type;
+        GLenum format;
+        GLenum baseformat;
+        GLenum min_filter;
+        GLenum mag_filter;
+        GLenum wrap_s;
+        GLenum wrap_t;
+        GLenum wrap_r;
+        GLboolean border : 1;
+        GLboolean gen_mipmap : 1;
+    } gl;
 
-  palette_t palette;
-  palette_t *shared_palette;
+    palette_t palette;
+    palette_t *shared_palette;
 
-  GLboolean used : 1;
-  GLboolean allocated : 1;
-  GLboolean bound : 1;
-  GLboolean mipmap : 1;
-  GLboolean mipmap_expected : 1;
+    GLboolean used : 1;
+    GLboolean allocated : 1;
+    GLboolean bound : 1;
+    GLboolean mipmap : 1;
+    GLboolean mipmap_expected : 1;
 
-  GLenum target;
-  GLuint dimensions;
-  GLuint width;
-  GLuint height;
-  GLuint depth;
+    GLenum target;
+    GLuint dimensions;
+    GLuint width;
+    GLuint height;
+    GLuint depth;
 
-  GLuint size;    // texture data size (all mips)
-  GLuint total;   // size + palette data size
-  GLuint pitch;   // stride for one line
-  GLuint zpitch;  // stride for one z level of 3d texture
-  GLuint bytespp; // bytes per pixel
+    GLuint size;    // texture data size (all mips)
+    GLuint total;   // size + palette data size
+    GLuint pitch;   // stride for one line
+    GLuint zpitch;  // stride for one z level of 3d texture
+    GLuint bytespp; // bytes per pixel
 
-  GLuint mipmax;
-  GLuint mipcount;
-  mipmap_t mips[TEX_MAX_MIPS];
+    GLuint mipmax;
+    GLuint mipcount;
+    mipmap_t mips[TEX_MAX_MIPS];
 
-  GLubyte *data;
+    GLubyte *data;
 } texture_t;
 
 GLboolean pbgl_tex_init(void);

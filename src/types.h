@@ -6,29 +6,39 @@
 #define PBGL_Z_MAX 16777215.0
 
 typedef union {
-  float v[2];
-  struct { float x, y; };
+    float v[2];
+    struct {
+        float x, y;
+    };
 } vec2f;
 
 typedef union {
-  float v[3];
-  struct { float x, y, z; };
-  struct { float r, g, b; };
-  vec2f vec2;
+    float v[3];
+    struct {
+        float x, y, z;
+    };
+    struct {
+        float r, g, b;
+    };
+    vec2f vec2;
 } vec3f;
 
 typedef union {
-  float v[4];
-  struct { float x, y, z, w; };
-  struct { float r, g, b, a; };
-  vec2f vec2;
-  vec3f vec3;
+    float v[4];
+    struct {
+        float x, y, z, w;
+    };
+    struct {
+        float r, g, b, a;
+    };
+    vec2f vec2;
+    vec3f vec3;
 } vec4f;
 
 typedef union __attribute__((aligned(16))) {
-  float v[16];
-  float m[4][4];
-  __m128 row[4];
+    float v[16];
+    float m[4][4];
+    __m128 row[4];
 } mat4f;
 
 extern const vec4f vec4_one;

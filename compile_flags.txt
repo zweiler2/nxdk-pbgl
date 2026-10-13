@@ -1,0 +1,14 @@
+-Iinclude
+-I/HDDs/2TB/Coding/XBOX/nxdk/lib
+-I/HDDs/2TB/Coding/XBOX/nxdk/lib/xboxrt/vcruntime
+-I/HDDs/2TB/Coding/XBOX/nxdk/lib/winapi
+-ffreestanding
+-nostdlib
+-fno-builtin
+-Wno-builtin-macro-redefined
+-DNXDK
+-D__STDC__=1
+-U__STDC_NO_THREADS__
+
+-fms-extensions
+-march=x86

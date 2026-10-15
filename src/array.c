@@ -35,6 +35,19 @@ static inline GLuint gltype_to_nvtype(const GLenum gltype) {
     }
 }
 
+static inline GLuint gltype_size(const GLenum gltype) {
+    switch (gltype) {
+        case GL_FLOAT:
+            return 4;
+        case GL_SHORT:
+            return 2;
+        case GL_UNSIGNED_BYTE:
+            return 1;
+        default:
+            return 1;
+    }
+}
+
 static inline void array_set(const GLenum index, const GLenum type, const GLsizei size,
     const GLsizei stride, const void *data) {
     varray_state_t *arr;
@@ -47,7 +60,9 @@ static inline void array_set(const GLenum index, const GLenum type, const GLsize
 
     arr->type = type;
     arr->size = size;
-    arr->stride = stride;
+    // GL reads a stride of 0 as "tightly packed", while the hardware reads it as "use
+    // the first element for every vertex", so expand it to the packed element size.
+    arr->stride = stride ? stride : (GLsizei)(size * gltype_size(type));
     arr->data = data;
     arr->dirty = GL_TRUE;
 }

@@ -22,6 +22,10 @@ static inline GLint imin(const GLint a, const GLint b) {
     return (a < b) ? a : b;
 }
 
+static inline GLboolean ispow2(const GLuint value) {
+    return value && !(value & (value - 1));
+}
+
 static inline GLuint ulog2(const GLuint value) {
     return (31 - __builtin_clz(value | 1));
 }

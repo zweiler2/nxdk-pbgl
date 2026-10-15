@@ -56,7 +56,9 @@ GL_API void glFogfv(GLenum pname, const GLfloat *params) {
             const GLubyte g = params[1] * 255.f;
             const GLubyte b = params[2] * 255.f;
             const GLubyte a = params[3] * 255.f;
-            const GLuint color = (a << 24) | (r << 16) | (g << 8) | b;
+            // `a` promotes to signed int, so shift it as unsigned to avoid
+            // `255 << 24` overflowing int (undefined behaviour).
+            const GLuint color = ((GLuint)a << 24) | (r << 16) | (g << 8) | b;
             if (pbgl.fog.color != color) {
                 pbgl.fog.color = color;
                 pbgl.state_dirty = pbgl.fog.dirty = GL_TRUE;

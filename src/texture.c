@@ -1,6 +1,7 @@
 #include <limits.h>
 #include <pbkit/pbkit.h>
 #include <stdlib.h>
+#include <string.h>
 #include <windows.h>
 #include <x86intrin.h>
 
@@ -137,6 +138,46 @@ static inline GLuint intfmt_gl_to_nv(const GLenum glformat) {
     }
 }
 
+// NPOT textures are stored linearly instead of being padded to a power of two, which only the
+// "LU" (linear) color formats support. These have to describe the exact same color layout as
+// their SZ counterparts, since that's what the texture data is converted to (see tex_store).
+static inline GLuint intfmt_gl_to_nv_linear(const GLenum glformat) {
+    switch (glformat) {
+        case GL_ALPHA:
+        case GL_ALPHA8:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8;
+
+        case 1: // legacy alias for GL_LUMINANCE
+        case GL_LUMINANCE:
+        case GL_LUMINANCE8:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y8;
+
+        case 2: // legacy alias for GL_LUMINANCE_ALPHA
+        case GL_LUMINANCE_ALPHA:
+        case GL_LUMINANCE8_ALPHA8:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8Y8;
+
+        case 3: // legacy alias for GL_RGB
+        case GL_RGB:
+        case GL_RGB8:
+        case 4: // legacy alias for GL_RGBA
+        case GL_RGBA:
+        case GL_RGBA8:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8;
+
+        case GL_RGBA4:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A4R4G4B4;
+        case GL_RGB5_A1:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A1R5G5B5;
+        case GL_RGB5:
+            return NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5;
+
+        default:
+            // no linear counterpart exists for paletted textures
+            return 0;
+    }
+}
+
 static inline GLuint intfmt_bytespp(const GLenum glformat) {
     switch (glformat) {
         case 1: // legacy alias for GL_LUMINANCE
@@ -247,13 +288,18 @@ static inline GLuint extfmt_bytespp(const GLenum glformat, const GLuint type, GL
 }
 
 static inline GLboolean tex_gl_to_nv(texture_t *tex) {
-    const GLuint fmt = intfmt_gl_to_nv(tex->gl.format);
+    // NPOT textures are stored linearly with the real image size in IMAGE_RECT; power of two
+    // textures keep the swizzled layout
+    const GLboolean npot = tex->nv.npot;
+    const GLuint fmt =
+        npot ? intfmt_gl_to_nv_linear(tex->gl.format) : intfmt_gl_to_nv(tex->gl.format);
 
     if (fmt == 0)
         return GL_FALSE; // unknown format
 
-    tex->nv.linear = GL_FALSE; // TODO: this is basically free GL_TEXTURE_RECTANGLE, but that isn't
-                               // in GL until 3.1
+    // NOTE: linear textures interpret texture coordinates as texel coordinates, not as
+    // normalized ones, so the texture matrix has to scale them (see tex_matrix_get)
+    tex->nv.linear = npot;
 
     const GLuint addr_u = wrap_gl_to_nv(tex->gl.wrap_s);
     const GLuint wrap_u = 0; // TODO: what is this?
@@ -266,7 +312,16 @@ static inline GLboolean tex_gl_to_nv(texture_t *tex) {
     tex->nv.wrap = (addr_u << 0) | (wrap_u << 4) | (addr_v << 8) | (wrap_v << 12) | (addr_p << 16) |
         (wrap_p << 20) | (wrap_q << 24);
 
-    const GLuint filter_min = filter_gl_to_nv_min(tex->gl.min_filter);
+    GLenum min_filter = tex->gl.min_filter;
+    if (npot && min_filter >= GL_NEAREST_MIPMAP_NEAREST) {
+        // linear textures only have a single mip level, so fall back to the matching
+        // non-mipmapping filter, like GL does for incomplete textures
+        min_filter =
+            (min_filter == GL_NEAREST_MIPMAP_NEAREST || min_filter == GL_LINEAR_MIPMAP_NEAREST)
+            ? GL_NEAREST
+            : GL_LINEAR;
+    }
+    const GLuint filter_min = filter_gl_to_nv_min(min_filter);
     const GLuint filter_mag = filter_gl_to_nv_mag(tex->gl.mag_filter);
 
     tex->nv.filter = PBGL_MASK(NV097_SET_TEXTURE_FILTER_MIN, filter_min) |
@@ -376,6 +431,10 @@ static void tex_mip8(GLubyte *out, const GLubyte *in, GLuint w, GLuint h, const 
 }
 
 static void tex_build_mips(texture_t *tex, GLubyte *data, const GLboolean in_place) {
+    // linear (NPOT) textures only have a single level
+    if (tex->nv.npot)
+        return;
+
     GLubyte *buf;
     const GLubyte *in;
     if (in_place) {
@@ -458,6 +517,37 @@ static void tex_store_palette(palette_t *pal) {
     pal->source = NULL;
 }
 
+// copy a tightly packed image (w * bytespp per row) into a linear (non-swizzled) texture
+static void tex_store_linear(const GLubyte *src, GLuint x, GLuint y, GLuint w, GLuint h,
+    GLubyte *dst, GLuint dst_pitch, GLuint bytespp) {
+    const GLuint row = w * bytespp;
+    dst += y * dst_pitch + x * bytespp;
+
+    if (x == 0 && row == dst_pitch) {
+        // the image covers whole rows, so it's a single contiguous copy
+        memcpy(dst, src, row * h);
+        return;
+    }
+
+    for (GLuint i = 0; i < h; ++i, dst += dst_pitch, src += row)
+        memcpy(dst, src, row);
+}
+
+// the reverse of tex_store_linear: copy a linear (non-swizzled) texture into a tightly packed
+// image
+static void tex_load_linear(const GLubyte *src, GLubyte *dst, GLuint w, GLuint h, GLuint src_pitch,
+    GLuint bytespp) {
+    const GLuint row = w * bytespp;
+
+    if (row == src_pitch) {
+        memcpy(dst, src, row * h);
+        return;
+    }
+
+    for (GLuint i = 0; i < h; ++i, src += src_pitch, dst += row)
+        memcpy(dst, src, row);
+}
+
 static void tex_store(texture_t *tex, const GLubyte *data, GLenum fmt, GLuint bytespp, GLuint level,
     GLuint x, GLuint y, GLuint w, GLuint h, GLboolean reverse, GLboolean genmips) {
     GLubyte *out = (GLubyte *)tex->mips[level].data;
@@ -469,7 +559,9 @@ static void tex_store(texture_t *tex, const GLubyte *data, GLenum fmt, GLuint by
 
     if (tex->bytespp == bytespp && !reverse) {
         // no need for conversion
-        if (x || y || w != tex->mips[level].width || h != tex->mips[level].height)
+        if (tex->nv.npot)
+            tex_store_linear(data, x, y, w, h, out, tex->mips[level].pitch, tex->bytespp);
+        else if (x || y || w != tex->mips[level].width || h != tex->mips[level].height)
             swizzle_subrect(data, x, y, w, h, out, tex->mips[level].width, tex->mips[level].height,
                 tex->bytespp);
         else
@@ -496,10 +588,12 @@ static void tex_store(texture_t *tex, const GLubyte *data, GLenum fmt, GLuint by
         (fmt == GL_RGB || fmt == GL_RGBA)) {
         // 3 or 4 bytes per pixel and it's either RGBA->RGB or RGB->RGBA or RGB->(X)RGB (can't be
         // RGBA->RGBA because that's handled above) RGB is a special case: internally RGB is XRGB
+        // NOTE: the internal formats store the channels in the same order as GL_RGBA does (i.e.
+        // A8B8G8R8 is R,G,B,A in memory), which is what the direct copy above relies on
         for (GLuint i = 0; i < w * h; ++i) {
-            dst[0] = src[2];
+            dst[0] = src[0];
             dst[1] = src[1];
-            dst[2] = src[0];
+            dst[2] = src[2];
             dst[3] = 0xFF;
             dst += tex->bytespp;
             src += bytespp;
@@ -509,7 +603,9 @@ static void tex_store(texture_t *tex, const GLubyte *data, GLenum fmt, GLuint by
     }
 
     // upload converted texture
-    if (x || y || w != tex->mips[level].width || h != tex->mips[level].height)
+    if (tex->nv.npot)
+        tex_store_linear(tmp, x, y, w, h, out, tex->mips[level].pitch, tex->bytespp);
+    else if (x || y || w != tex->mips[level].width || h != tex->mips[level].height)
         swizzle_subrect(tmp, x, y, w, h, out, tex->mips[level].width, tex->mips[level].height,
             tex->bytespp);
     else
@@ -581,9 +677,12 @@ static GLboolean tex_alloc(texture_t *tex) {
 
     tex->palette.data = palsize ? tex->data + asize : NULL;
 
-    // turn miplevel offsets into pointers
+    // turn miplevel offsets into pointers. Add the offset to the (non-NULL)
+    // base rather than incrementing the offset in place: the level-0 mip
+    // offset is 0, stored as NULL, and `NULL + base` is undefined behaviour
+    // that UBSan rejects even though it happens to work on x86.
     for (GLuint i = 0; i < tex->mipmax; ++i)
-        tex->mips[i].data += (GLuint)tex->data;
+        tex->mips[i].data = tex->data + (GLuint)tex->mips[i].data;
 
     tex->allocated = GL_TRUE;
 
@@ -853,14 +952,26 @@ GL_API void glTexImage2D(GLenum target, GLint level, GLint intfmt, GLsizei width
     pbgl.state_dirty = pbgl.tex_any_dirty = pbgl.tex[pbgl.active_tex_sv].dirty = GL_TRUE;
     pbgl.texenv_dirty = GL_TRUE; // texture type might have changed
 
-    // lower to the previous power of two, we only support power of two textures
-    // TODO: actually downscale
-    width = uflp2(width);
-    height = uflp2(height);
+    // NPOT textures are stored linearly instead of being padded to a power of two (see
+    // tex_gl_to_nv); the hardware gets the real image size through IMAGE_RECT and the texture
+    // matrix scales the texture coordinates into the texel space it expects for linear textures
+    GLboolean npot = !ispow2(width) || !ispow2(height);
+    if (npot && intfmt_gl_to_nv_linear(intfmt) == 0) {
+        // no linear color format exists for this texture (paletted textures can't be linear),
+        // so fall back to the old behavior of only supporting power of two textures
+        pbgl_debug_log("no linear format for NPOT 0x%04x, only supporting power of two", intfmt);
+        width = uflp2(width);
+        height = uflp2(height);
+        npot = GL_FALSE;
+    }
 
     if (tex->allocated) {
         // texture is already allocated, what the fuck does the user want?
         if (level > 0) {
+            if (tex->nv.npot) {
+                // linear (NPOT) textures only have a single level, so extra levels are a no-op
+                return;
+            }
             // user wants to upload mipmaps
             tex->mipcount = level + 1;
             if (!tex->mipmap) {
@@ -894,12 +1005,18 @@ GL_API void glTexImage2D(GLenum target, GLint level, GLint intfmt, GLsizei width
         // texture is not yet allocated or has just been deallocated
         // initalize texture (2 dimensions, 1 depth level)
         tex_init(tex, 2, width << level, height << level, 1, intfmt_bytespp(intfmt));
+        // linear (NPOT) textures only ever have a single level, so no mipmaps are allocated
+        // for them
+        tex->nv.npot = npot;
         // predict whether mipmaps are gonna be used
-        if (target == GL_TEXTURE_2D) {
+        // NOTE: linear (NPOT) textures only ever have a single level
+        if (npot) {
+            tex->mipmap = GL_FALSE;
+        } else if (target == GL_TEXTURE_2D) {
             tex->mipmap = (tex->gl.min_filter >= GL_NEAREST_MIPMAP_NEAREST) || tex->gl.gen_mipmap ||
                 tex->mipmap_expected;
         }
-        tex->mipcount = level + 1;
+        tex->mipcount = npot ? 1 : (level + 1);
         // set GL formats
         tex->gl.basetarget = target;
         tex->gl.type = type;
@@ -1202,6 +1319,12 @@ GL_API void glGenerateMipmap(GLenum target) {
         return;
     }
 
+    if (tex->nv.npot) {
+        // linear (NPOT) textures only have a single level
+        pbgl_debug_log("glGenerateMipmap on an NPOT texture is not supported");
+        return;
+    }
+
     // if the texture isn't ready for mipmaps, realloc it
     if (!tex->mipmap) {
         tex->mipmap = GL_TRUE;
@@ -1253,8 +1376,12 @@ GL_API void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type
     }
 
     if (format == tex->gl.baseformat && type == tex->gl.type) {
-        unswizzle_rect(tex->mips[level].data, tex->mips[level].width, tex->mips[level].height,
-            pixels, tex->mips[level].pitch, tex->bytespp);
+        if (tex->nv.npot)
+            tex_load_linear(tex->mips[level].data, (GLubyte *)pixels, tex->mips[level].width,
+                tex->mips[level].height, tex->mips[level].pitch, tex->bytespp);
+        else
+            unswizzle_rect(tex->mips[level].data, tex->mips[level].width, tex->mips[level].height,
+                pixels, tex->mips[level].pitch, tex->bytespp);
     } else {
         // TODO
         pbgl_set_error(GL_INVALID_OPERATION);

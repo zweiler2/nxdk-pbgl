@@ -20,12 +20,17 @@ Extension list:
 
 Known limitations:
 * pbGL assumes that the color buffer is RGBA8888 and the depth buffer is D24S8;
-* `glVertexPointer` etc do not make copies of the vertex data;
+* `glVertexPointer` etc do not make copies of the vertex data, and they are not synchronized
+  against the GPU: every `glDrawArrays`/`glDrawElements` needs its own client array (or the
+  arrays have to be left untouched until the GPU has consumed the draw), otherwise an earlier
+  draw can read the data written for a later one;
 * `GL_TEXTURE_1D`, `GL_TEXTURE_3D`, `GL_TEXTURE_CUBE_MAP` are not supported yet;
 * `glTexImage2D` etc only convert RGB888 <-> RGBA8888, otherwise you have to use the same format;
 * GL lighting and material system is not fully implemented;
 * maximum theoretical texture size is 4096x4096;
-* NPOT textures are not supported and will likely explode;
+* NPOT textures are supported as linear (non-swizzled) textures with a single mip level, so they
+  slow down sampling (they cannot be swizzled) and cannot be mipmapped. `GL_COLOR_INDEX` NPOT
+  textures are downscaled to the next power of two, because palettes require swizzled textures;
 * supported texture formats:
   * `RGB888`, `RGBA8888`
   * `GL_COLOR_INDEX8_EXT` (with either `GL_RGB8` or `GL_RGBA8` palettes, no format conversion)

@@ -40,6 +40,7 @@ typedef struct {
         GLuint addr;           // data & 0x7FFFFFFF
         GLboolean linear : 1;  // is the texture linear?
         GLboolean aligned : 1; // is size 64-byte aligned?
+        GLboolean npot : 1;    // is the texture non-power-of-two? (always linear, see texture.c)
     } nv;
 
     struct {

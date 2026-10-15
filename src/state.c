@@ -176,6 +176,27 @@ void pbgl_state_init(void) {
     pbgl.active = GL_TRUE; // this can only be used when we're live
 }
 
+// Linear textures (which is how NPOT textures are stored, see texture.c) treat texture
+// coordinates as texel coordinates instead of normalized ones, so normalized GL coordinates
+// have to be scaled by the texture size. This is done with the texture matrix, which the
+// hardware applies to the coordinates before it feeds them to the texture unit.
+// Returns GL_TRUE if the hardware should apply the matrix for this texture unit.
+static GLboolean tex_matrix_get(const GLuint unit, mat4f *out) {
+    const GLuint idx = MTX_TEXTURE0 + unit;
+    const texture_t *tex = pbgl.tex[unit].tex;
+
+    if (tex && tex->nv.npot) {
+        mat4f scale = mat4_identity;
+        scale.m[0][0] = (GLfloat)tex->width;
+        scale.m[1][1] = (GLfloat)tex->height;
+        mat4_mul_sse(out, &scale, &pbgl.mtx[idx].mtx);
+        return GL_TRUE;
+    }
+
+    *out = pbgl.mtx[idx].mtx;
+    return !pbgl.mtx[idx].identity;
+}
+
 static inline GLuint *flush_texunit(GLuint *p, GLuint i) {
     texunit_state_t *tu = pbgl.tex + i;
 
@@ -194,18 +215,36 @@ static inline GLuint *flush_texunit(GLuint *p, GLuint i) {
 
         const GLuint tidx = i * 64;
         if (tu->tex && enable != NV_TEX_DISABLE) {
-            // note: we only operate on swizzled textures
             const GLuint texmat = MTX_TEXTURE0 + i;
+            // linear (NPOT) textures only have a single level, so limit the LOD range to that
+            const GLuint max_lod = tu->tex->nv.npot ? 0 : 4095;
             p = push_command_parameter(p, NV097_SET_TEXTURE_OFFSET + tidx, tu->tex->nv.addr);
             p = push_command_parameter(p, NV097_SET_TEXTURE_FORMAT + tidx, tu->tex->nv.format);
             p = push_command_parameter(p, NV097_SET_TEXTURE_PALETTE + tidx, tu->tex->nv.palette);
             p = push_command_parameter(p, NV097_SET_TEXTURE_ADDRESS + tidx, tu->tex->nv.wrap);
             p = push_command_parameter(p, NV097_SET_TEXTURE_CONTROL0 + tidx,
                 enable | PBGL_MASK(NV097_SET_TEXTURE_CONTROL0_MIN_LOD_CLAMP, 0) |
-                    PBGL_MASK(NV097_SET_TEXTURE_CONTROL0_MAX_LOD_CLAMP, 4095));
+                    PBGL_MASK(NV097_SET_TEXTURE_CONTROL0_MAX_LOD_CLAMP, max_lod));
             p = push_command_parameter(p, NV097_SET_TEXTURE_FILTER + tidx, tu->tex->nv.filter);
-            p = push_command_boolean(p, NV097_SET_TEXTURE_MATRIX_ENABLE + i * 4,
-                !pbgl.mtx[texmat].identity);
+            // image pitch and size are only used for linear textures, swizzled textures derive
+            // them from their format, but set them unconditionally like XGU does
+            p = push_command_parameter(p, NV097_SET_TEXTURE_CONTROL1 + tidx,
+                PBGL_MASK(NV097_SET_TEXTURE_CONTROL1_IMAGE_PITCH, tu->tex->pitch));
+            p = push_command_parameter(p, NV097_SET_TEXTURE_IMAGE_RECT + tidx,
+                PBGL_MASK(NV097_SET_TEXTURE_IMAGE_RECT_WIDTH, tu->tex->width) |
+                    PBGL_MASK(NV097_SET_TEXTURE_IMAGE_RECT_HEIGHT, tu->tex->height));
+            // the texture matrix depends on the texture, since linear (NPOT) textures need it
+            // to scale the texture coordinates, so it has to be pushed whenever the bound
+            // texture changes, not only when the GL texture matrix changes
+            mat4f mtx;
+            const GLboolean mtx_enable = tex_matrix_get(i, &mtx);
+            p = push_command_boolean(p, NV097_SET_TEXTURE_MATRIX_ENABLE + i * 4, mtx_enable);
+            if (mtx_enable) {
+                // the hardware expects matrices in transposed (row major) order, see the
+                // model view/projection matrices
+                p = push_command_matrix4x4_transposed(p, NV097_SET_TEXTURE_MATRIX + tidx, mtx.v);
+                pbgl.mtx[texmat].dirty = GL_FALSE;
+            }
         } else {
             p = push_command_parameter(p, NV097_SET_TEXTURE_CONTROL0 + tidx, NV_TEX_DISABLE);
             p = push_command_parameter(p, NV097_SET_TEXTURE_PALETTE + tidx, 0);
@@ -403,7 +442,11 @@ GLboolean pbgl_state_flush(void) {
         for (GLuint i = MTX_TEXTURE0, ofs = 0; i < MTX_TEXTURE0 + TEXUNIT_COUNT;
             ++i, ofs += 4 * 4 * 4) {
             if (pbgl.mtx[i].dirty) {
-                p = push_command_matrix4x4(p, NV097_SET_TEXTURE_MATRIX + ofs, pbgl.mtx[i].mtx.v);
+                // may include the texture coordinate scale for linear (NPOT) textures
+                mat4f mtx;
+                tex_matrix_get(i - MTX_TEXTURE0, &mtx);
+                // the hardware expects matrices in transposed (row major) order
+                p = push_command_matrix4x4_transposed(p, NV097_SET_TEXTURE_MATRIX + ofs, mtx.v);
                 pbgl.mtx[i].dirty = GL_FALSE;
             }
         }
@@ -646,7 +689,9 @@ GL_API void glBlendColor(GLclampf rf, GLclampf gf, GLclampf bf, GLclampf af) {
     const GLubyte g = gf * 255.f;
     const GLubyte b = bf * 255.f;
     const GLubyte a = af * 255.f;
-    const GLuint color = (a << 24) | (r << 16) | (g << 8) | b;
+    // `a` promotes to signed int, so shift it as unsigned to avoid `255 << 24`
+    // overflowing int (undefined behaviour).
+    const GLuint color = ((GLuint)a << 24) | (r << 16) | (g << 8) | b;
     if (pbgl.blend.color != color) {
         pbgl.state_dirty = pbgl.blend.dirty = GL_TRUE;
         pbgl.blend.color = color;
@@ -673,7 +718,9 @@ GL_API void glClearColor(GLclampf rf, GLclampf gf, GLclampf bf, GLclampf af) {
     const GLubyte g = gf * 255.f;
     const GLubyte b = bf * 255.f;
     const GLubyte a = af * 255.f;
-    pbgl.clear_color = (a << 24) | (r << 16) | (g << 8) | b;
+    // `a` promotes to signed int, so shift it as unsigned to avoid `255 << 24`
+    // overflowing int (undefined behaviour).
+    pbgl.clear_color = ((GLuint)a << 24) | (r << 16) | (g << 8) | b;
 }
 
 GL_API void glClearDepth(GLclampd val) {

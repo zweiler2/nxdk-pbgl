@@ -26,6 +26,9 @@ Known limitations:
   draw can read the data written for a later one;
 * `GL_TEXTURE_1D`, `GL_TEXTURE_3D`, `GL_TEXTURE_CUBE_MAP` are not supported yet;
 * `glTexImage2D` etc only convert RGB888 <-> RGBA8888, otherwise you have to use the same format;
+* `glGetTexImage` only converts between the byte per channel color formats (`GL_RGB`, `GL_RGBA`,
+  `GL_LUMINANCE`, `GL_ALPHA`, `GL_LUMINANCE_ALPHA`); for any other format and type combination the
+  requested format has to match the texture's internal one;
 * GL lighting and material system is not fully implemented;
 * maximum theoretical texture size is 4096x4096;
 * NPOT textures are supported as linear (non-swizzled) textures with a single mip level, so they

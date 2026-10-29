@@ -77,14 +77,26 @@ static inline GLuint *array_push_format(GLuint *p, GLuint index, GLuint format, 
             PBGL_MASK(NV097_SET_VERTEX_DATA_ARRAY_FORMAT_STRIDE, stride));
 }
 
+// The GPU fetches array data through the vertex DMA object, so the offset it gets has to be a
+// physical address. The pointers the application passes in are virtual addresses, and those are
+// not guaranteed to be identity mapped: the XBE loader puts the sections of an image at whatever
+// physical pages it gets, which only lines up with the virtual addresses for small images. So
+// translate instead of just masking off the cache bits.
+static inline GLuint array_phys_addr(const void *data) {
+    if (!data)
+        return 0;
+    return (GLuint)MmGetPhysicalAddress((void *)data) & 0x03FFFFFF;
+}
+
 static inline GLuint *array_push_offset(GLuint *p, GLuint index, const void *data) {
-    return push_command_parameter(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + index * 4, (GLuint)data);
+    return push_command_parameter(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + index * 4,
+        array_phys_addr(data));
 }
 
 static inline GLuint *array_set_attrib_pointer(GLuint *p, GLuint index, GLuint format, GLuint size,
     GLuint stride, const void *data) {
     p = array_push_format(p, index, format, size, stride);
-    p = array_push_offset(p, index, (const void *)((GLuint)data & 0x03FFFFFF));
+    p = array_push_offset(p, index, data);
     return p;
 }
 
@@ -192,9 +204,11 @@ void pbgl_array_flush_all(void) {
         }
     }
 
-    // set the texcoord arrays
+    // set the texcoord arrays, likewise gating on dirty alone: array_flush() writes the
+    // current immediate value when the array is disabled, and dirty stays set until that
+    // has actually reached the GPU
     for (GLuint i = 0; i < TEXUNIT_COUNT; ++i) {
-        if (pbgl.tex[i].enabled && pbgl.tex[i].varray.dirty) {
+        if (pbgl.tex[i].varray.dirty) {
             p = array_flush(p, &pbgl.tex[i].varray, NV2A_VERTEX_ATTR_TEXTURE0 + i);
             pbgl.tex[i].varray.dirty = GL_FALSE;
         }

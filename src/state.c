@@ -594,12 +594,14 @@ static inline void set_client_state(GLenum state, GLboolean value) {
         return;
     }
 
-    if (arr == VARR_TEXCOORD && pbgl.tex[pbgl.active_tex_cl].varray.enabled != value) {
-        pbgl.tex[pbgl.active_tex_cl].varray.enabled = value;
-        pbgl.tex[pbgl.active_tex_cl].varray.dirty = GL_TRUE;
-    } else if (pbgl.varray[arr].enabled != value) {
-        pbgl.varray[arr].enabled = value;
-        pbgl.varray[arr].dirty = GL_TRUE;
+    // VARR_TEXCOORD is a pseudo index: each texture unit has its own array state, so
+    // pbgl.varray[] has only VARR_TEXCOORD entries and must not be indexed with it
+    varray_state_t *varray =
+        (arr == VARR_TEXCOORD) ? &pbgl.tex[pbgl.active_tex_cl].varray : &pbgl.varray[arr];
+
+    if (varray->enabled != value) {
+        varray->enabled = value;
+        varray->dirty = GL_TRUE;
     }
 }
 

@@ -52,6 +52,13 @@ GL_API void glBegin(GLenum prim) {
     pbgl.imm.num = 0;
     pbgl.imm.flags = 0;
 
+    // TODO: GL ignores client vertex arrays between glBegin and glEnd (the vertex data is given
+    // inline here), but the hardware keeps reading whichever source the vertex array FORMAT
+    // registers point at, and those still describe the arrays if a glDrawArrays happened before.
+    // Mixing array and immediate draws in the same frame may therefore be wrong on real hardware:
+    // the fix is to force all attributes back into inline mode here (and mark the arrays dirty
+    // again in glEnd). xemu masks this, because its SET_BEGIN_END path ignores the FORMAT
+    // registers and always uses the inline values.
     pbgl_state_flush();
 
     GLuint *p = pb_begin();
@@ -176,6 +183,11 @@ GL_API void glTexCoord2iv(const GLint *v) {
 }
 
 GL_API void glMultiTexCoord4f(GLenum unit, GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
+    // pbgl.tex[] only covers GL_TEXTURE0..GL_TEXTURE3, so a wider unit would write past it
+    if (unit < GL_TEXTURE0 || unit > GL_TEXTURE3) {
+        pbgl_set_error(GL_INVALID_ENUM);
+        return;
+    }
     unit -= GL_TEXTURE0;
     pbgl.imm.texcoord_flag = GL_TRUE;
     pbgl.tex[unit].varray.value.x = s;
@@ -218,6 +230,7 @@ GL_API void glFogCoordf(GLfloat x) {
     pbgl.varray[VARR_FOG].value.y = x;
     pbgl.varray[VARR_FOG].value.z = x;
     pbgl.varray[VARR_FOG].value.w = x;
+    pbgl.varray[VARR_FOG].dirty = GL_TRUE;
     pbgl.imm.fogcoord_flag = GL_TRUE;
 }
 

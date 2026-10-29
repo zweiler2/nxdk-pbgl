@@ -25,6 +25,20 @@
 static GLboolean pbkit_initialized = GL_FALSE;
 static GLboolean pbkit_do_deinit = GL_FALSE;
 
+// The GPU fetches client vertex array data through the DMA object given by
+// NV097_SET_CONTEXT_DMA_VERTEX_A/_B; the offsets pushed by glVertexPointer etc. are relative to
+// that object's base address, not absolute physical addresses. pbkit does not create a suitable
+// object, so without this the driver reads vertex data from wherever an unrelated (or empty) DMA
+// object happens to point. This one covers all of system memory with a base of 0, which makes the
+// masked 26-bit offsets the array code pushes plain physical addresses.
+//
+// The parameter of the SET_CONTEXT_DMA_* methods is a handle into the FIFO's RAM hash table, so
+// the object has to be registered with pb_bind_channel() rather than used by instance address.
+// The handle is deliberately at the very end of pbkit's 512 entry table to stay clear of the
+// small ones (2..14) pbkit registers for itself.
+#define PBGL_VERTEX_DMA_HANDLE 0x1FE
+static struct s_CtxDma vertex_dma;
+
 // workaround for pbkit enabling the wrong Z buffer mode
 static inline void pbgl_target_back_buffer(void) {
     while (pb_finished())
@@ -60,9 +74,17 @@ int pbgl_init(int init_pbkit) {
         pbkit_initialized = GL_TRUE;
     }
 
+    // create and register the DMA context that vertex arrays are fetched through (see vertex_dma)
+    pb_create_dma_ctx(PBGL_VERTEX_DMA_HANDLE, DMA_CLASS_3D, 0x80000000, MAXRAM, &vertex_dma);
+    pb_bind_channel(&vertex_dma);
+
     pb_show_front_screen();
 
     GLuint *p = pb_begin();
+
+    // point the vertex array DMA contexts at it
+    p = push_command_parameter(p, NV097_SET_CONTEXT_DMA_VERTEX_A, PBGL_VERTEX_DMA_HANDLE);
+    p = push_command_parameter(p, NV097_SET_CONTEXT_DMA_VERTEX_B, PBGL_VERTEX_DMA_HANDLE);
 
     // set fixed pipeline mode
     p = push_command_parameter(p, NV097_SET_TRANSFORM_EXECUTION_MODE,

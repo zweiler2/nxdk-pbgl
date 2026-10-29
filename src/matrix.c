@@ -121,7 +121,12 @@ GL_API void glLoadTransposeMatrixd(const GLdouble *m) {
 }
 
 GL_API void glMultMatrixf(const GLfloat *m) {
-    mat4_mul(&pbgl.mtx[pbgl.mtx_current].mtx, &pbgl.mtx[pbgl.mtx_current].mtx, (const mat4f *)m);
+    // Copy into an aligned local: GL only requires the caller's array to be
+    // 4 byte aligned, while mat4f is declared aligned(16) for the SSE paths.
+    mat4f tmp;
+    for (int i = 0; i < 16; ++i)
+        tmp.v[i] = m[i];
+    mat4_mul_sse(&pbgl.mtx[pbgl.mtx_current].mtx, &pbgl.mtx[pbgl.mtx_current].mtx, &tmp);
     pbgl.mtx[pbgl.mtx_current].identity = GL_FALSE;
     pbgl.state_dirty = pbgl.mtx_any_dirty = pbgl.mtx[pbgl.mtx_current].dirty = GL_TRUE;
 }

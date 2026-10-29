@@ -1363,6 +1363,58 @@ GL_API void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint
     // TODO:
 }
 
+// Read a texture level into a tightly packed buffer, undoing the swizzle for power of two
+// textures. The data keeps the internal memory layout (see tex_load_linear/unswizzle_rect).
+static void tex_load_level(const texture_t *tex, GLuint level, GLubyte *dst) {
+    const mipmap_t *mip = &tex->mips[level];
+    if (tex->nv.npot)
+        tex_load_linear(mip->data, dst, mip->width, mip->height, mip->pitch, tex->bytespp);
+    else
+        unswizzle_rect(mip->data, mip->width, mip->height, dst, mip->pitch, tex->bytespp);
+}
+
+// Expand a single internal texel to 8 bit per channel RGBA. Only the byte per channel internal
+// formats are handled; they store their channels in the order GL_RGBA uses in memory, with RGB
+// using up one unused byte per texel (see the note in tex_store).
+static void tex_load_texel(const GLubyte *src, GLenum baseformat, GLubyte *r, GLubyte *g,
+    GLubyte *b, GLubyte *a) {
+    switch (baseformat) {
+        case GL_RGBA:
+            *r = src[0];
+            *g = src[1];
+            *b = src[2];
+            *a = src[3];
+            break;
+
+        case GL_RGB:
+            *r = src[0];
+            *g = src[1];
+            *b = src[2];
+            *a = 0xFF;
+            break;
+
+        case GL_LUMINANCE:
+            *r = *g = *b = src[0];
+            *a = 0xFF;
+            break;
+
+        case GL_ALPHA:
+            *r = *g = *b = 0;
+            *a = src[0];
+            break;
+
+        case GL_LUMINANCE_ALPHA:
+            *r = *g = *b = src[0];
+            *a = src[1];
+            break;
+
+        default:
+            *r = *g = *b = 0;
+            *a = 0xFF;
+            break;
+    }
+}
+
 GL_API void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels) {
     if (pbgl.imm.active) {
         pbgl_set_error(GL_INVALID_OPERATION);
@@ -1375,16 +1427,52 @@ GL_API void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type
         return;
     }
 
-    if (format == tex->gl.baseformat && type == tex->gl.type) {
-        if (tex->nv.npot)
-            tex_load_linear(tex->mips[level].data, (GLubyte *)pixels, tex->mips[level].width,
-                tex->mips[level].height, tex->mips[level].pitch, tex->bytespp);
-        else
-            unswizzle_rect(tex->mips[level].data, tex->mips[level].width, tex->mips[level].height,
-                pixels, tex->mips[level].pitch, tex->bytespp);
-    } else {
-        // TODO
+    GLboolean reverse = GL_FALSE; // TODO: actually implement GL_BGR* support
+    const GLuint dst_bytespp = extfmt_bytespp(format, type, &reverse);
+    const mipmap_t *mip = &tex->mips[level];
+
+    // if the requested external layout is byte for byte identical to the internal one, the data
+    // can be written out directly. NOTE: this has to take the internal bytes per pixel into
+    // account, since an internal RGB texture still uses up one unused byte per texel, so reading
+    // it back as GL_RGB needs the conversion below
+    if (format == tex->gl.baseformat && type == tex->gl.type && dst_bytespp == tex->bytespp) {
+        tex_load_level(tex, level, (GLubyte *)pixels);
+        return;
+    }
+
+    // conversion. TODO: only byte per channel color formats are handled here; the packed 16 bit
+    // and the paletted formats still need to be converted
+    const GLboolean src_byte_color = tex->gl.baseformat == GL_RGB ||
+        tex->gl.baseformat == GL_RGBA || tex->gl.baseformat == GL_LUMINANCE ||
+        tex->gl.baseformat == GL_ALPHA || tex->gl.baseformat == GL_LUMINANCE_ALPHA;
+    const GLboolean dst_byte_color = format == GL_RGB || format == GL_RGBA;
+    if (type != GL_UNSIGNED_BYTE || reverse || dst_bytespp == 0 || !src_byte_color ||
+        !dst_byte_color) {
         pbgl_set_error(GL_INVALID_OPERATION);
         return;
     }
+
+    // read the internal data into a tightly packed buffer, then convert it texel by texel
+    GLubyte *tmp = malloc(mip->size);
+    if (!tmp) {
+        pbgl_set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+    tex_load_level(tex, level, tmp);
+
+    GLubyte *dst = (GLubyte *)pixels;
+    const GLubyte *src = tmp;
+    for (GLuint i = 0; i < mip->width * mip->height; ++i) {
+        GLubyte r, g, b, a;
+        tex_load_texel(src, tex->gl.baseformat, &r, &g, &b, &a);
+        dst[0] = r;
+        dst[1] = g;
+        dst[2] = b;
+        if (format == GL_RGBA)
+            dst[3] = a;
+        dst += dst_bytespp;
+        src += tex->bytespp;
+    }
+
+    free(tmp);
 }

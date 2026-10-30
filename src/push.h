@@ -7,6 +7,19 @@
 #include <pbkit/pbkit.h>
 #include <stdint.h>
 
+/* pbkit only wraps the push buffer around on pb_reset(), so a frame that pushes more than
+ * PBKIT_PUSHBUFFER_SIZE dwords runs off the end of the ring and corrupts the command stream.
+ * Keep track of how much was pushed since the last reset and recycle the buffer before it
+ * fills up. Every block is a single begin/end pair, so this never happens inside a block. */
+uint32_t *pbgl_push_begin(void);
+void pbgl_push_end(uint32_t *p);
+void pbgl_push_reset(void);
+
+#ifndef PBGL_PUSH_IMPL
+#define pb_begin() pbgl_push_begin()
+#define pb_end(p) pbgl_push_end(p)
+#endif
+
 #define NV097_SET_TWO_SIDE_LIGHT_EN 0x17C4
 #define NV097_SET_BACK_SCENE_AMBIENT_COLOR 0x17A0
 #define NV097_SET_BACK_MATERIAL_EMISSION 0x17B0

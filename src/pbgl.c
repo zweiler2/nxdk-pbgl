@@ -228,6 +228,7 @@ void pbgl_swap_buffers(void) {
         ;
 
     pb_reset();
+    pbgl_push_reset();
 }
 
 void *pbgl_alloc(unsigned int size) {
